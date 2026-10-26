@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schach Game Review</title>
+<meta name="description" content="Analysiert deine chess.com-Partien mit Stockfish: Brilliant, Great, Best, Blunder & Co. mit Erklärungen.">
+<style>
+:root { --bg:#f7f7f5; --fl:#ffffff; --tx:#1d1d1b; --mut:#6b6b66; --rand:#e2e2dc; --akz:#3b7a57; --aktiv:#e8eedd; --gruen:#81b64c; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg:#161615; --fl:#21211f; --tx:#ececea; --mut:#9a9a94; --rand:#33332f; --akz:#7fc39b; --aktiv:#3a4231; }
+}
+:root[data-theme="dark"] { --bg:#161615; --fl:#21211f; --tx:#ececea; --mut:#9a9a94; --rand:#33332f; --akz:#7fc39b; --aktiv:#3a4231; }
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--bg); color:var(--tx); font:15px/1.5 system-ui, sans-serif; }
+main { max-width:1100px; margin:0 auto; padding:20px 16px 64px; }
+h1 { margin:0 0 4px; font-size:28px; } h2 { margin:40px 0 8px; font-size:19px; }
+.hinweis, .unter { color:var(--mut); margin:0 0 10px; font-size:13px; }
+.karten { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin-top:20px; }
+.karte { background:var(--fl); border:1px solid var(--rand); border-radius:10px; padding:14px 16px; }
+.wert { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; } .label { color:var(--mut); font-size:13px; }
+.scroll { overflow-x:auto; background:var(--fl); border:1px solid var(--rand); border-radius:10px; }
+table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+th, td { padding:7px 12px; text-align:left; border-bottom:1px solid var(--rand); white-space:nowrap; }
+th { color:var(--mut); font-weight:500; font-size:13px; } tr:last-child td { border-bottom:0; }
+.r { text-align:right; } a { color:var(--akz); }
+.warum { white-space:normal; min-width:280px; max-width:420px; font-size:13px; }
+.sym { display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 3px;
+       border-radius:9px; color:#fff; font-size:11px; font-weight:700; line-height:1; vertical-align:-3px; margin-right:2px; }
+button, select, input { font:inherit; color:inherit; }
+.knopf { padding:9px 16px; border-radius:8px; border:1px solid var(--rand); background:var(--fl); cursor:pointer; font-weight:600; }
+.knopf:hover { background:var(--aktiv); }
+.knopf.haupt { background:var(--gruen); border-color:var(--gruen); color:#fff; }
+.knopf.haupt:hover { filter:brightness(1.06); background:var(--gruen); }
+.knopf:disabled { opacity:.5; cursor:default; }
+
+/* ---------- Kopf / Suche ---------- */
+.kopf { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.logo { font-weight:800; font-size:18px; color:var(--tx); text-decoration:none; display:flex; align-items:center; gap:8px; }
+.logo .sym { width:26px; height:26px; border-radius:13px; font-size:13px; background:#26c2a3; }
+.suche { display:flex; gap:8px; flex:1; max-width:420px; min-width:240px; }
+.suche input { flex:1; min-width:0; padding:9px 12px; border-radius:8px; border:1px solid var(--rand); background:var(--fl); }
+.start { text-align:center; padding:12vh 0 40px; }
+.start h1 { font-size:34px; }
+.start .suche { margin:22px auto 10px; max-width:460px; }
+.start .klassen { display:flex; flex-wrap:wrap; gap:6px 14px; justify-content:center; margin-top:28px; color:var(--mut); font-size:13px; }
+.fehler { color:#d9452f; margin-top:10px; }
+.leiste { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px; }
+.leiste select { padding:8px 10px; border-radius:8px; border:1px solid var(--rand); background:var(--fl); }
+.fortschritt { flex:1; min-width:220px; }
+.balken { height:8px; border-radius:4px; background:var(--rand); overflow:hidden; }
+.balken div { height:100%; width:0; background:var(--gruen); transition:width .3s; }
+.fortschritt .text { font-size:13px; color:var(--mut); margin-top:4px; }
+.mehr { margin-top:10px; }
+
+/* ---------- Game Review ---------- */
+.zurueck { display:inline-block; margin-bottom:14px; }
+.viewer { display:grid; grid-template-columns:minmax(0, 620px) minmax(300px, 1fr); gap:20px; align-items:start; }
+@media (max-width: 900px) { .viewer { grid-template-columns:minmax(0, 1fr); } }
+.spieler { display:flex; justify-content:space-between; align-items:center; padding:6px 2px 6px 32px; font-weight:600; gap:8px; }
+.spieler .gen { font-weight:500; color:var(--mut); font-size:13px; }
+.brettzeile { display:flex; gap:8px; position:relative; }
+.evalbar { position:relative; width:24px; flex:none; border-radius:4px; overflow:hidden; background:#403d39; }
+.evalweiss { position:absolute; left:0; right:0; background:#f2f2f2; transition:height .3s ease; }
+.evaltext { position:absolute; left:0; right:0; text-align:center; font-size:10px; font-weight:700; z-index:1; }
+.brett { position:relative; flex:1; aspect-ratio:1; user-select:none; --f:60px; }
+.feld, .figur, .mark { position:absolute; width:12.5%; height:12.5%; }
+.hell { background:#ebecd0; } .dunkel { background:#739552; }
+.feld span { position:absolute; font-size:calc(var(--f) * .2); font-weight:700; line-height:1; }
+.feld .rang { left:4%; top:4%; } .feld .linie { right:5%; bottom:4%; }
+.hell span { color:#739552; } .dunkel span { color:#ebecd0; }
+.mark { opacity:.5; }
+.figur { background-size:100% 100%; z-index:2; pointer-events:none; }
+.badge { position:absolute; z-index:4; width:calc(var(--f) * .42); height:calc(var(--f) * .42); border-radius:50%;
+         display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800;
+         font-size:calc(var(--f) * .2); box-shadow:0 1px 3px rgba(0,0,0,.4); transform:translate(-60%, -40%); }
+.pfeile { position:absolute; inset:0; z-index:3; pointer-events:none; }
+.laden { position:absolute; inset:0 0 0 32px; z-index:10; display:flex; flex-direction:column; gap:12px; align-items:center;
+         justify-content:center; background:rgba(0,0,0,.55); color:#fff; border-radius:4px; font-weight:600; padding:20px; text-align:center; }
+.laden .balken { width:70%; background:rgba(255,255,255,.25); }
+.knoepfe { display:flex; gap:6px; margin:12px 0 0 32px; }
+.knoepfe button { flex:1; padding:9px 0; font-size:16px; border:1px solid var(--rand); background:var(--fl);
+                  border-radius:8px; cursor:pointer; }
+.knoepfe button:hover { background:var(--aktiv); }
+.panel { background:var(--fl); border:1px solid var(--rand); border-radius:10px; overflow:hidden; }
+.panel + .panel { margin-top:14px; }
+.panel h3 { margin:0; padding:10px 14px; font-size:14px; border-bottom:1px solid var(--rand); }
+.kommentar { padding:12px 14px; min-height:74px; }
+.kommentar .titel { font-weight:600; font-size:16px; display:flex; align-items:center; gap:8px; }
+.kommentar .titel .sym { width:24px; height:24px; border-radius:12px; font-size:12px; flex:none; }
+.kommentar .text { color:var(--mut); font-size:13px; margin-top:4px; }
+.kommentar .warum-text { color:var(--tx); font-size:14px; margin:6px 0 4px; }
+.zugliste { max-height:300px; overflow-y:auto; font-variant-numeric:tabular-nums; }
+.zugzeile { display:grid; grid-template-columns:44px 1fr 1fr; padding:0 8px; }
+.zugzeile:nth-child(odd) { background:color-mix(in srgb, var(--rand) 35%, transparent); }
+.zugzeile .nr { color:var(--mut); padding:4px 0 4px 6px; }
+.zug { padding:4px 6px; border-radius:5px; cursor:pointer; display:flex; align-items:center; gap:5px; }
+.zug:hover { background:var(--aktiv); }
+.zug.an { background:var(--aktiv); font-weight:700; }
+.zug .sym { min-width:16px; height:16px; font-size:9px; }
+.zusammen td { padding:5px 12px; }
+.zusammen td:first-child, .zusammen td:last-child { width:60px; text-align:center; font-weight:600; }
+.zusammen th { text-align:center; }
+.graph { position:relative; height:90px; margin:12px 0 0 32px; border-radius:6px; overflow:hidden; cursor:pointer; background:#403d39; }
+.graph svg { position:absolute; inset:0; width:100%; height:100%; }
+.graph .punkt { position:absolute; width:8px; height:8px; border-radius:50%; transform:translate(-50%, -50%); box-shadow:0 0 0 1.5px #fff; }
+.graph .jetzt { position:absolute; top:0; bottom:0; width:2px; background:#5d9eff; }
+.tasten { color:var(--mut); font-size:12px; margin:10px 0 0 32px; }
+
+/* ---------- Galerie ---------- */
+.galerie { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:14px; }
+.galerie-karte { display:block; background:var(--fl); border:1px solid var(--rand); border-radius:10px; padding:10px;
+                 color:var(--tx); text-decoration:none; transition:transform .15s, box-shadow .15s; }
+.galerie-karte:hover { transform:translateY(-2px); box-shadow:0 4px 14px rgba(0,0,0,.12); }
+.brett.mini { width:100%; --f:24px; border-radius:4px; overflow:hidden; }
+.brett.mini .badge { transform:translate(-80%, 10%); }
+.galerie-text { margin-top:8px; font-size:14px; } .galerie-text span { color:var(--mut); font-size:12px; }
+.galerie-text p { margin:6px 0 0; font-size:12.5px; line-height:1.45; }
+footer { color:var(--mut); font-size:12px; margin-top:48px; text-align:center; }
+</style></head><body><main>
+
+<div class="kopf" id="kopf" hidden>
+  <a class="logo" href="#"><span class="sym">!!</span> Game Review</a>
+  <form class="suche" data-suche><input name="name" placeholder="chess.com-Benutzername" autocomplete="off" required>
+    <button class="knopf haupt">Laden</button></form>
+</div>
+
+<section id="start" class="start" hidden>
+  <h1>Game Review für deine chess.com-Partien</h1>
+  <p class="unter">Jeder Zug wird mit Stockfish bewertet und erklärt – direkt in deinem Browser.</p>
+  <form class="suche" data-suche><input name="name" placeholder="chess.com-Benutzername" autocomplete="off" required autofocus>
+    <button class="knopf haupt">Partien laden</button></form>
+  <div class="fehler" id="start-fehler"></div>
+  <div class="klassen" id="start-klassen"></div>
+</section>
+
+<section id="uebersicht" hidden></section>
+
+<section id="partie" hidden>
+  <a href="#" class="zurueck" id="zurueck">← Zurück zur Übersicht</a>
+  <div class="viewer">
+    <div>
+      <div class="spieler" id="sp-oben"></div>
+      <div class="brettzeile">
+        <div class="evalbar"><div class="evalweiss" id="evalweiss"></div><div class="evaltext" id="evaltext"></div></div>
+        <div class="brett" id="brett"></div>
+        <div class="laden" id="laden" hidden></div>
+      </div>
+      <div class="spieler" id="sp-unten"></div>
+      <div class="knoepfe">
+        <button id="k-anfang" title="Anfang (Pos1)">⏮</button>
+        <button id="k-zurueck" title="Zurück (←)">◀</button>
+        <button id="k-play" title="Abspielen (Leertaste)">▶︎ Play</button>
+        <button id="k-vor" title="Vor (→)">▶</button>
+        <button id="k-ende" title="Ende (Ende)">⏭</button>
+        <button id="k-drehen" title="Brett drehen (F)">⇅</button>
+      </div>
+      <div class="graph" id="graph"></div>
+      <div class="tasten">Tastatur: ← → Züge · Pos1/Ende · Leertaste abspielen · F Brett drehen</div>
+    </div>
+    <div>
+      <div class="panel"><div class="kommentar" id="kommentar"></div></div>
+      <div class="panel"><h3 id="partie-titel"></h3><div class="zugliste" id="zugliste"></div></div>
+      <div class="panel"><h3>Zusammenfassung</h3><div class="scroll" style="border:0;border-radius:0">
+        <table class="zusammen" id="zusammen"></table></div></div>
+    </div>
+  </div>
+</section>
+
+<footer>Partien von der öffentlichen chess.com-API · Analyse mit Stockfish 17.1 (läuft lokal im Browser) ·
+  Die Einstufung ist eine Annäherung an das chess.com Game Review.</footer>
+</main>
+<script type="module" src="app.js"></script>
+</body></html>
