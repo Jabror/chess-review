@@ -1046,6 +1046,7 @@ document.addEventListener('keydown', e => {
 new ResizeObserver(([e]) => $('brett').style.setProperty('--f', e.contentRect.width / 8 + 'px')).observe($('brett'));
 window.addEventListener('hashchange', route);
 
+Object.values(FIG).forEach(src => { new Image().src = src; });  // Figuren vorladen, damit das erste Brett nicht leer ist
 $('start-klassen').innerHTML = Object.keys(KL).map(k => `<span>${sym(k)} ${KL[k][0]}</span>`).join('');
 const letzter = speicher.get('letzterName');
 if (letzter) document.querySelectorAll('[data-suche] input').forEach(i => { i.value = letzter; });
