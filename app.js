@@ -14,6 +14,7 @@ const KL = {
   best: ['Best', '#81b64c', '★'],
   excellent: ['Excellent', '#81b64c', '✓'],
   good: ['Good', '#95af8a', '✓'],
+  book: ['Book', '#a88865', '▤'],
   inaccuracy: ['Inaccuracy', '#f7c631', '?!'],
   mistake: ['Mistake', '#ffa459', '?'],
   miss: ['Miss', '#ff7769', '✕'],
@@ -25,6 +26,13 @@ const EXCELLENT = 2, GOOD = 5, INACCURACY = 10, MISTAKE = 20;
 const GREAT_ABSTAND = 15;            // Great: der zweitbeste Zug wäre mindestens so viel schlechter
 const BRILLIANT_OPFER = 1;           // Brilliant: Figur geopfert, nach Abtauschen mind. so viel Material weniger
 const BRILLIANT_MAX_ALTERNATIVE = 90; // ... und ohne das Opfer stünde man nicht schon klar auf Gewinn
+
+// Geschätzte Spielstärke: Elo ≈ ELO_BASIS − ELO_STEIGUNG · ln(Ø Verlust pro Zug + 1), gemessen an 690 Blitz- und
+// Rapid-Partien von 0 bis 3000 Elo. Eine einzelne Partie ist ungenau (±770), daher wird mit dem echten Rating
+// gemischt: Gewicht der Schätzung = Züge / (Züge + ELO_GEWICHT)
+const ELO_BASIS = 2800, ELO_STEIGUNG = 845, ELO_GEWICHT = 30;
+// Eröffnungstheorie: Stellung -> Name der Eröffnung ('' = Zwischenstellung), erzeugt von book_erzeugen.py
+let BOOK = {};
 
 const WERT = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 100 };
 const FIGUR = { p: 'Bauer', n: 'Springer', b: 'Läufer', r: 'Turm', q: 'Dame', k: 'König' };
@@ -314,17 +322,39 @@ function gewinnchance(cp) {
 const chanceFuer = (farbe, cp) => farbe === 'w' ? gewinnchance(cp) : 100 - gewinnchance(cp);
 const zugGenauigkeit = v => Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * v) - 3.1669));
 
+/** Geschätzte Elo, auf der eine Seite gespielt hat (wie „Game Rating“ bei chess.com).
+ *  Grundlage ist der Verlust pro Zug ohne Theoriezüge; bei weniger als 5 eigenen Zügen keine Schätzung. */
+function spielstaerke(zuege, farbe, rating) {
+  const verluste = zuege.filter(z => z.farbe === farbe && !z.buch).map(z => z.verlust);
+  if (verluste.length < 5) return null;
+  let roh = Math.max(100, Math.min(3000, ELO_BASIS - ELO_STEIGUNG * Math.log(mittel(verluste) + 1)));
+  if (rating) roh = rating + (roh - rating) * verluste.length / (verluste.length + ELO_GEWICHT);
+  return Math.round(roh / 10) * 10;
+}
+
+const buchSchluessel = fen => fen.split(' ').slice(0, 3).join(' ');
+/** Züge ab der Startstellung, solange jede Stellung in der Eröffnungstheorie vorkommt. */
+function markiereBuch(zuege) {
+  let buch = zuege.length > 0 && buchSchluessel(zuege[0].fen_vorher) in BOOK, name = '';
+  for (const z of zuege) {
+    buch = buch && buchSchluessel(z.fen) in BOOK;
+    name = buch ? BOOK[buchSchluessel(z.fen)] || name : '';
+    z.buch = buch; z.buch_name = name;
+  }
+}
+
 /** Stuft jeden Zug beider Seiten nach dem Vorbild des chess.com Game Review ein. */
 function klassifiziere(zuege) {
+  markiereBuch(zuege);
   zuege.forEach((z, i) => {
     const f = z.farbe;
     const vorher = chanceFuer(f, z.vorher), nachher = chanceFuer(f, z.nachher);
     const istBest = z.linien.length > 0 && z.uci === z.linien[0][0];
-    const verlust = istBest ? 0 : Math.max(0, vorher - nachher);
+    const verlust = istBest || z.buch ? 0 : Math.max(0, vorher - nachher);
     const andereLinien = z.linien.filter(l => l[0] !== z.uci).map(l => chanceFuer(f, l[1]));
     const alternative = andereLinien.length ? Math.max(...andereLinien) : null;
 
-    let k = istBest ? 'best' : verlust < EXCELLENT ? 'excellent' : verlust < GOOD ? 'good'
+    let k = z.buch ? 'book' : istBest ? 'best' : verlust < EXCELLENT ? 'excellent' : verlust < GOOD ? 'good'
       : verlust < INACCURACY ? 'inaccuracy' : verlust < MISTAKE ? 'mistake' : 'blunder';
     const gegner = i > 0 ? zuege[i - 1] : null;
     z.opfer = 0; z.opfer_feld = null;
@@ -336,14 +366,15 @@ function klassifiziere(zuege) {
         && (alternative == null || alternative < BRILLIANT_MAX_ALTERNATIVE)
         && ([z.opfer, z.opfer_feld] = opfer(z.fen_vorher, z.uci))[0] >= BRILLIANT_OPFER) {
       k = 'brilliant';
-    } else if (istBest && z.legal > 1 && !z.rueck && alternative != null && vorher - alternative >= GREAT_ABSTAND) {
+    } else if (k === 'best' && z.legal > 1 && !z.rueck && alternative != null && vorher - alternative >= GREAT_ABSTAND) {
       k = 'great';
     }
     Object.assign(z, { verlust, klasse: k, chance_vorher: vorher, chance_nachher: nachher });
   });
   zuege.forEach((z, i) => {
     z.warum = SCHLECHT.has(z.klasse) ? erklaere(z, i > 0 ? zuege[i - 1] : null)
-      : z.klasse === 'brilliant' ? erklaereBrilliant(z) : '';
+      : z.klasse === 'brilliant' ? erklaereBrilliant(z)
+        : z.klasse === 'book' ? (z.buch_name ? `Eröffnungstheorie: ${z.buch_name}.` : 'Eröffnungstheorie.') : '';
   });
 }
 
@@ -542,6 +573,8 @@ function werteAus(user, p, zuege) {
   return {
     id: pid(p), p, url: p.url, datum: new Date(p.end_time * 1000), zeitklasse: p.time_class || '?', farbe,
     gegner: gegner.username, gegnerRating: gegner.rating, punkte, genauigkeit: gen(farbe), genWB: [gen('w'), gen('b')],
+    eloWB: [spielstaerke(zuege, 'w', p.white.rating), spielstaerke(zuege, 'b', p.black.rating)],
+    ichElo: spielstaerke(zuege, farbe, ich.rating), gegnerElo: spielstaerke(zuege, andere(farbe), gegner.rating),
     eroeffnung: name, familie, zuege: eigene, alle: zuege,
   };
 }
@@ -553,7 +586,7 @@ function viewerDaten(g) {
   return {
     url: g.url, datum: datum(g.datum), zeit: g.zeitklasse, w: [w.username, w.rating], b: [b.username, b.rating], erg,
     ich: g.farbe, er: g.eroeffnung, start: fenMatch ? fenMatch[1] : new Chess().fen(),
-    cp0: g.alle.length ? g.alle[0].vorher : 0, gen: g.genWB,
+    cp0: g.alle.length ? g.alle[0].vorher : 0, gen: g.genWB, elo: g.eloWB,
     z: g.alle.map(z => [z.san, z.uci, z.fen, z.klasse, z.nachher, z.best || '', z.linien.length ? z.linien[0][0] : '', z.warum]),
   };
 }
@@ -585,6 +618,7 @@ function tabelle(kopf, zeilen, rechtsAb = 1) {
   const z = zeilen.map(zeile => '<tr>' + zeile.map((c, i) => `<td class="${i >= rechtsAb ? 'r' : ''}">${c}</td>`).join('') + '</tr>').join('');
   return `<div class="scroll"><table><thead><tr>${k}</tr></thead><tbody>${z}</tbody></table></div>`;
 }
+const eloText = x => x == null ? '–' : '~' + Math.round(x / 10) * 10;
 const zaehle = (zz, k) => zz.filter(z => z.klasse === k).length;
 const zugtext = z => `${z.zugnr}${z.farbe === 'w' ? '.' : '...'} ${z.san}`;
 const link = (id, ply = 0) => `#u=${encodeURIComponent(S.user)}&p=${encodeURIComponent(id)}&z=${ply}`;
@@ -607,6 +641,7 @@ function karriereHTML(auswertung) {
   const teile = [];
   const karten = [['Analysierte Partien', n], ['Siege / Remis / Niederlagen', `${siege} / ${remis} / ${n - siege - remis}`],
     ['Ø Genauigkeit', prozent(mittel(auswertung.map(g => g.genauigkeit)))],
+    ['Ø gespielt wie', eloText(mittel(auswertung.map(g => g.ichElo)))],
     ['Blunder pro Partie', (zaehle(alle, 'blunder') / Math.max(n, 1)).toFixed(2).replace('.', ',')],
     ['Brilliant-Züge', zaehle(alle, 'brilliant')]];
   teile.push('<div class="karten">' + karten.map(([l, w]) =>
@@ -668,12 +703,15 @@ function partienHTML() {
     const ich = farbe === 'w' ? p.white : p.black, gegner = farbe === 'w' ? p.black : p.white;
     const punkte = ich.result === 'win' ? 1 : REMIS.has(ich.result) ? 0.5 : 0;
     return [datum(new Date(p.end_time * 1000)), esc(p.time_class), farbe === 'w' ? 'Weiß' : 'Schwarz',
-      `${esc(gegner.username)} (${esc(gegner.rating)})`, ergebnis[punkte], g ? prozent(g.genauigkeit) : '–',
+      esc(ich.rating), g ? eloText(g.ichElo) : '–', `${esc(gegner.username)} (${esc(gegner.rating)})`, g ? eloText(g.gegnerElo) : '–',
+      ergebnis[punkte], g ? prozent(g.genauigkeit) : '–',
       g ? ['brilliant', 'mistake', 'miss', 'blunder'].map(k => `${sym(k)}${zaehle(g.zuege, k)}`).join(' ') : '',
       `<a href="${link(id)}">${g ? 'Ansehen' : 'Analysieren'}</a> · <a href="${esc(p.url)}" target="_blank" rel="noopener">chess.com</a>`];
   });
-  return '<h2>Partien</h2><p class="hinweis">„Analysieren“ öffnet das Game Review – die Analyse dauert ein paar Sekunden.</p>'
-    + tabelle(['Datum', 'Zeit', 'Farbe', 'Gegner', 'Ergebnis', 'Genauigkeit', 'Brilliant · Mistake · Miss · Blunder', ''], zeilen, 5)
+  return '<h2>Partien</h2><p class="hinweis">„Analysieren“ öffnet das Game Review – die Analyse dauert ein paar Sekunden. '
+    + 'Elo = Rating bei Spielbeginn, „gespielt wie“ = aus der Genauigkeit geschätzte Spielstärke.</p>'
+    + tabelle(['Datum', 'Zeit', 'Farbe', 'Deine Elo', 'Gespielt wie', 'Gegner (Elo)', 'Gespielt wie', 'Ergebnis', 'Genauigkeit',
+      'Brilliant · Mistake · Miss · Blunder', ''], zeilen, 8)
     + (S.partien.length > S.zeigeAnzahl
       ? `<button class="knopf mehr" id="mehr">Weitere Partien anzeigen (${S.partien.length - S.zeigeAnzahl} übrig)</button>` : '');
 }
@@ -838,9 +876,9 @@ function zeichneBrett(animiert) {
 }
 
 function spielerZeile(farbe) {
-  const [name, rating] = R.spiel[farbe], gen = R.spiel.gen[farbe === 'w' ? 0 : 1];
+  const [name, rating] = R.spiel[farbe], gen = R.spiel.gen[farbe === 'w' ? 0 : 1], elo = R.spiel.elo?.[farbe === 'w' ? 0 : 1];
   return `<span>${farbe === 'w' ? '⚪' : '⚫'} ${esc(name)} <span class="gen">(${rating ?? '?'})${farbe === R.spiel.ich ? ' (du)' : ''}</span></span>`
-    + `<span class="gen">Genauigkeit ${gen == null ? '–' : gen.toFixed(1)}</span>`;
+    + `<span class="gen">Genauigkeit ${gen == null ? '–' : gen.toFixed(1)}${elo == null ? '' : ` · gespielt wie ~${elo}`}</span>`;
 }
 function zeichneSpieler() {
   const oben = R.orient === 'w' ? 'b' : 'w';
@@ -862,8 +900,10 @@ function baueZusammenfassung() {
   const zahl = { w: {}, b: {} };
   R.spiel.z.forEach((z, i) => { const f = zugInfo(i).farbe; zahl[f][z[3]] = (zahl[f][z[3]] || 0) + 1; });
   const g = R.spiel.gen.map(x => x == null ? '–' : x.toFixed(1));
+  const e = (R.spiel.elo || [null, null]).map(x => x == null ? '–' : '~' + x);
   let h = `<thead><tr><th>${esc(R.spiel.w[0])}</th><th></th><th>${esc(R.spiel.b[0])}</th></tr></thead><tbody>`
-    + `<tr><td>${g[0]}</td><td>Genauigkeit</td><td>${g[1]}</td></tr>`;
+    + `<tr><td>${g[0]}</td><td>Genauigkeit</td><td>${g[1]}</td></tr>`
+    + `<tr><td>${e[0]}</td><td title="Aus der Genauigkeit geschätzte Spielstärke">Gespielt wie</td><td>${e[1]}</td></tr>`;
   for (const k in KL)
     h += `<tr><td style="color:${KL[k][1]}">${zahl.w[k] || 0}</td><td>${sym(k)} ${KL[k][0]}</td><td style="color:${KL[k][1]}">${zahl.b[k] || 0}</td></tr>`;
   $('zusammen').innerHTML = h + '</tbody>';
@@ -883,7 +923,7 @@ function baueGraph() {
 }
 const SATZ = {
   brilliant: 'ist brillant!', great: 'ist ein großartiger Zug', best: 'ist der beste Zug', excellent: 'ist exzellent',
-  good: 'ist gut', inaccuracy: 'ist eine Ungenauigkeit', mistake: 'ist ein Fehler', miss: 'verpasst eine Chance',
+  good: 'ist gut', book: 'ist Eröffnungstheorie', inaccuracy: 'ist eine Ungenauigkeit', mistake: 'ist ein Fehler', miss: 'verpasst eine Chance',
   blunder: 'ist ein grober Patzer',
 };
 function zeichneKommentar() {
@@ -1050,5 +1090,6 @@ Object.values(FIG).forEach(src => { new Image().src = src; });  // Figuren vorla
 $('start-klassen').innerHTML = Object.keys(KL).map(k => `<span>${sym(k)} ${KL[k][0]}</span>`).join('');
 const letzter = speicher.get('letzterName');
 if (letzter) document.querySelectorAll('[data-suche] input').forEach(i => { i.value = letzter; });
+BOOK = await fetch('book.json').then(r => r.json()).catch(() => ({}));
 await DB.oeffnen();
 route();
